@@ -7175,9 +7175,19 @@ StateReturnType AIHuntState::update()
 		const AttackPriorityInfo *info = NULL;
 		info = ai->getAttackInfo();
 
+		// Focus Fire Enhancement - Update team's coordinated target
+		// This will intelligently select the best target for multiple team members to attack together
+		if (owner->getTeam()->getPrototype()->getTemplateInfo()->m_attackCommonTarget)
+		{
+			// Periodically update the focus fire target (every 30 frames to avoid performance impact)
+			if ((now % 30) == 0) {
+				owner->getTeam()->updateFocusFireTarget(9999.9f, info);
+			}
+		}
+
 		// Check if team auto targets same victim.
 		Object* teamVictim = NULL;
-		if (owner->getTeam()->getPrototype()->getTemplateInfo()->m_attackCommonTarget) 
+		if (owner->getTeam()->getPrototype()->getTemplateInfo()->m_attackCommonTarget)
 		{
 			teamVictim = owner->getTeam()->getTeamTargetObject();
 		}

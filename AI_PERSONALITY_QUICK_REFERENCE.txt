@@ -1,0 +1,106 @@
+================================================================================
+AI PERSONALITY SYSTEM - QUICK REFERENCE
+================================================================================
+
+SETUP
+-----
+AdaptiveCombatTracker *ai = NEW_POOL_OBJ(AdaptiveCombatTracker, aiPlayer);
+ai->setPersonality(AI_PERSONALITY_AGGRESSIVE);  // or ECONOMIC, DEFENSIVE, BALANCED
+
+PERSONALITY TYPES
+-----------------
+┌─────────────┬───────────────────┬────────────┬────────────┬─────────────┐
+│ Personality │ Primary Focus     │ Learn Rate │ Min Kills  │ Best For    │
+├─────────────┼───────────────────┼────────────┼────────────┼─────────────┤
+│ AGGRESSIVE  │ Unit kills        │ Fast (1.5) │ 2 (risky)  │ Rush/Attack │
+│ ECONOMIC    │ Economy damage    │ Med (1.2)  │ 2 (quick)  │ Harass/Deny │
+│ DEFENSIVE   │ Counter tactics   │ Slow (0.8) │ 4 (safe)   │ React/Def   │
+│ BALANCED    │ No bias           │ Norm (1.0) │ 3 (std)    │ Default AI  │
+└─────────────┴───────────────────┴────────────┴────────────┴─────────────┘
+
+WEIGHT COMPARISON
+-----------------
+                    Aggressive  Economic  Defensive  Balanced
+Economic Damage:        0.3       2.5        0.8        1.0
+Unit Kill:              2.0       0.4        1.2        1.0
+Strategic Target:       0.5       2.0        1.0        1.0
+Collateral Damage:      1.5       0.5        1.0        1.0
+
+WHAT EACH PERSONALITY TARGETS
+------------------------------
+AGGRESSIVE: Tanks, Infantry, Aircraft, Heavy Units
+ECONOMIC:   Supply Trucks, Docks, Power Plants, Production Buildings
+DEFENSIVE:  Whatever threatens them most (adapts to player)
+BALANCED:   General priorities (no preference)
+
+USAGE EXAMPLES
+--------------
+// Random personality
+ai->setPersonality((AIPersonality)(rand() % 4));
+
+// Difficulty-based
+if (difficulty < 3) ai->setPersonality(AI_PERSONALITY_BALANCED);
+else if (difficulty < 5) ai->setPersonality(AI_PERSONALITY_DEFENSIVE);
+else ai->setPersonality(AI_PERSONALITY_AGGRESSIVE);
+
+// Team composition
+ai1->setPersonality(AI_PERSONALITY_AGGRESSIVE);  // Frontline
+ai2->setPersonality(AI_PERSONALITY_ECONOMIC);    // Harasser
+ai3->setPersonality(AI_PERSONALITY_DEFENSIVE);   // Defender
+
+INTEGRATION
+-----------
+// On kill
+adaptiveAI->onEnemyKilled(victim, killer);
+
+// Every frame
+adaptiveAI->update();
+
+// Get target priority
+float priority = basePriority * adaptiveAI->getPriorityMultiplier(template);
+
+DEBUGGING
+---------
+TheGlobalData->m_debugAI = true;  // Enable debug display
+
+Output shows:
+- Current personality
+- Learned priorities (multipliers)
+- Recent kills and effectiveness scores
+
+FILES
+-----
+AdaptiveAI.h                      - Header with personality system
+AdaptiveAI.cpp                    - Implementation
+AdaptiveAI_PersonalityExample.cpp - Usage examples
+AI_PERSONALITY_SYSTEM.md          - Full documentation
+
+COUNTERS
+--------
+vs AGGRESSIVE → Use defensive play, focus on economy
+vs ECONOMIC   → Rush with strong army, protect supplies
+vs DEFENSIVE  → Mix strategies, keep them guessing, early aggression
+vs BALANCED   → Use specialist strategies (pure rush or pure econ)
+
+KEY METHODS
+-----------
+setPersonality(AIPersonality)           - Set AI personality type
+getPersonality()                        - Get current personality
+getPersonalityWeights()                 - Get weight parameters
+getPriorityMultiplier(ThingTemplate*)   - Get learned priority (0.5-2.5x)
+reset()                                 - Clear learned data
+
+LEARNING TIMELINE
+-----------------
+Aggressive: Adapts in ~10 seconds (needs 2 kills)
+Economic:   Adapts in ~10 seconds (needs 2 kills)
+Defensive:  Adapts in ~20 seconds (needs 4 kills)
+Balanced:   Adapts in ~15 seconds (needs 3 kills)
+
+PRIORITY MULTIPLIER RANGE
+--------------------------
+0.5x = Strongly avoid this target
+1.0x = Normal priority (default)
+2.5x = Strongly prefer this target
+
+================================================================================

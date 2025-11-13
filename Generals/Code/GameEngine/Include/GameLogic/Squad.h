@@ -1,5 +1,5 @@
 /*
-**	Command & Conquer Generals(tm)
+**	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
 **	This program is free software: you can redistribute it and/or modify
@@ -94,6 +94,21 @@ public:
 	// When creating the AIGroup from the Squad, the old AIGroup affiliations are broken.
 	void squadFromAIGroup(const AIGroup* fromAIGroup, Bool clearSquadFirst);
 	void aiGroupFromSquad(AIGroup* aiGroupToFill);
+
+	// Focus Fire Enhancement - Squad Coordination
+	// Finds the best target for the squad to focus fire on, considering:
+	// - How many squad members can attack the target
+	// - Target priority/value
+	// - Distance to target
+	// Returns NULL if no suitable target found
+	Object* findBestFocusFireTarget(Real maxRange, const class AttackPriorityInfo* attackInfo = NULL) const;
+
+	// Returns how many live squad members can attack the given target
+	Int countSquadMembersCanAttack(const Object* target) const;
+
+	// Calculates a focus fire score for a potential target
+	// Higher score = better target for focus fire
+	Real calculateFocusFireScore(const Object* target, const class AttackPriorityInfo* attackInfo) const;
 };
 EMPTY_DTOR(Squad)
 

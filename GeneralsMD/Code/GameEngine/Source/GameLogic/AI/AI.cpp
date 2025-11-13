@@ -37,6 +37,7 @@
 #include "Common/XferCRC.h"
 
 #include "GameLogic/AI.h"
+#include "GameLogic/AdaptiveAI.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/ContainModule.h"
@@ -687,7 +688,7 @@ Object *AI::findClosestEnemy( const Object *me, Real range, UnsignedInt qualifie
 	for (Object *theEnemy = iter->first(); theEnemy; theEnemy = iter->next()) 
 	{
 		Int curPriority = info->getPriority(theEnemy->getTemplate());
-		if (curPriority == 0) 
+		if (curPriority == 0)
 			continue; // don't attack 0 priority targets.
 
 		/* check for garrisoned buildings/vehicles & see if a higher priority unit is inside. */
@@ -700,6 +701,12 @@ Object *AI::findClosestEnemy( const Object *me, Real range, UnsignedInt qualifie
 			if (priorityInfo.priority > curPriority) {
 				curPriority = priorityInfo.priority;
 			}
+		}
+
+		// Apply adaptive AI learning multiplier
+		if (TheAdaptiveAI) {
+			Real adaptiveMultiplier = TheAdaptiveAI->getPriorityMultiplier(theEnemy->getTemplate());
+			curPriority = (Int)(curPriority * adaptiveMultiplier);
 		}
 
 		Real distSqr = ThePartitionManager->getDistanceSquared(me, theEnemy, FROM_BOUNDINGSPHERE_2D);

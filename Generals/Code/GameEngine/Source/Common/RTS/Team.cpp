@@ -1,5 +1,5 @@
 /*
-**	Command & Conquer Generals(tm)
+**	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
 **	This program is free software: you can redistribute it and/or modify
@@ -50,6 +50,7 @@
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/ScriptActions.h"
 #include "GameLogic/ScriptEngine.h"
+#include "GameLogic/Squad.h"
 
 #ifdef _INTERNAL
 // for occasional debugging...
@@ -258,7 +259,7 @@ void TeamFactory::addTeamPrototypeToList(TeamPrototype* team)
 	TeamPrototypeMap::iterator it = m_prototypes.find(nk);
 	if (it != m_prototypes.end())
 	{
-		DEBUG_ASSERTCRASH((*it).second==team, ("uh oh, mismatch"));
+		DEBUG_ASSERTCRASH((*it).second==team, ("TeamFactory::addTeamPrototypeToList: Team %s already exists... skipping.", team->getName().str()));
 		return;	// already present
 	}
 
@@ -1523,8 +1524,10 @@ Object *Team::getTeamTargetObject(void)
 	Object *target = TheGameLogic->findObjectByID(m_commonAttackTarget);
 	if (target) {
 		//If the enemy unit is stealthed and not detected, then we can't attack it!
-		UnsignedInt status = target->getStatusBits();
-		if( (status & OBJECT_STATUS_STEALTHED) && !(status & OBJECT_STATUS_DETECTED) ) {
+	if( target->testStatus( OBJECT_STATUS_STEALTHED ) && 
+			!target->testStatus( OBJECT_STATUS_DETECTED ) &&
+			!target->testStatus( OBJECT_STATUS_DISGUISED ) )
+		{
 			target = NULL;
 		}
 	}
@@ -1534,10 +1537,61 @@ Object *Team::getTeamTargetObject(void)
 	if (target && target->getContainedBy()) {
 		target = NULL; // target entered a building or vehicle, so stop targeting.
 	}
+	if (target && target->isKindOf(KINDOF_AIRCRAFT)) {
+		// It is just generally bad to have an aircraft as the team target. 
+		// Let team members acquire aircraft individually.  jba. [8/27/2003]
+		target = NULL;
+	}
 	if (target == NULL) {
 		m_commonAttackTarget = INVALID_ID;
 	}
 	return target;
+}
+
+// ------------------------------------------------------------------------
+/**
+ * Focus Fire Enhancement - Update team's target using squad coordination
+ * This finds the best target for multiple team members to focus fire on together,
+ * improving combat effectiveness significantly.
+ */
+Bool Team::updateFocusFireTarget(Real maxRange, const AttackPriorityInfo* attackInfo)
+{
+	// Only AI players use focus fire
+	if (getControllingPlayer()->getPlayerType() != PLAYER_COMPUTER) {
+		return FALSE;
+	}
+
+	// Don't use focus fire on easy difficulty (keep AI less effective)
+	if (getControllingPlayer()->getPlayerDifficulty() == DIFFICULTY_EASY) {
+		return FALSE;
+	}
+
+	// Only update if we should be using common attack targets
+	if (!getPrototype()->getTemplateInfo()->m_attackCommonTarget) {
+		return FALSE;
+	}
+
+	// Create a temporary squad from team members
+	Squad *tempSquad = newInstance(Squad)();
+	if (!tempSquad) {
+		return FALSE;
+	}
+
+	tempSquad->squadFromTeam(this, TRUE);
+
+	// Use the squad's focus fire algorithm to find the best target
+	Object* focusTarget = tempSquad->findBestFocusFireTarget(maxRange, attackInfo);
+
+	// Clean up temporary squad
+	tempSquad->deleteInstance();
+
+	// Set the focus fire target if found
+	if (focusTarget) {
+		setTeamTargetObject(focusTarget);
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 // ------------------------------------------------------------------------
@@ -1623,7 +1677,7 @@ void Team::countObjectsByThingTemplate(Int numTmplates, const ThingTemplate* con
 			if (ignoreDead && iter.cur()->isEffectivelyDead())
 				continue;
 
-			if( ignoreUnderConstruction && (BitTest(iter.cur()->getStatusBits(), OBJECT_STATUS_UNDER_CONSTRUCTION) == TRUE) )
+			if( ignoreUnderConstruction && iter.cur()->getStatusBits().test( OBJECT_STATUS_UNDER_CONSTRUCTION ) )
 				continue;
 
 			counts[i] += 1;
@@ -2220,7 +2274,7 @@ Bool Team::someInsideSomeOutside(PolygonTrigger *pTrigger, UnsignedInt whichToCo
 	return anyConsidered && anyInside && anyOutside;
 }
 
-const Coord3D* Team::getEstimateTeamPosition(void)
+const Coord3D* Team::getEstimateTeamPosition(void) const
 {
 	// this doesn't actually calculate the team position, but rather estimates it by
 	// returning the position of the first member of the team

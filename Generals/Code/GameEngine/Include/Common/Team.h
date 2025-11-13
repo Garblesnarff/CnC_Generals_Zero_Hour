@@ -1,5 +1,5 @@
 /*
-**	Command & Conquer Generals(tm)
+**	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
 **	This program is free software: you can redistribute it and/or modify
@@ -296,15 +296,23 @@ public:
 	*/
 	void setRecruitable(Bool recruitable) {m_isRecruitablitySet = true; m_isRecruitable = recruitable;}
 
-	/** 
+	/**
 		Set the team's target object.
 	*/
 	void setTeamTargetObject(const Object *target) ;
 
-	/** 
+	/**
 		Set the team's target object.
 	*/
-	Object *getTeamTargetObject(void); 
+	Object *getTeamTargetObject(void);
+
+	/**
+		Find and set the best focus fire target for the team using squad coordination.
+		This uses the focus fire system to identify high-value targets that multiple
+		team members can attack together.
+		Returns true if a focus fire target was found and set, false otherwise.
+	*/
+	Bool updateFocusFireTarget(Real maxRange, const class AttackPriorityInfo* attackInfo = NULL); 
 
 	/** 
 		Set the team as active.  A team is considered created when set active.
@@ -474,7 +482,7 @@ public:
 		a convenience routine used to estimate the team's position by just returning the position
 		of the first member of the team
 		*/
-	const Coord3D* getEstimateTeamPosition(void);
+	const Coord3D* getEstimateTeamPosition(void) const;
 	
 	/**
 		a convenience routine to move a team's units to another team.

@@ -78,6 +78,7 @@
 #include "GameClient/GameText.h"
 
 #include "GameLogic/AI.h"
+#include "GameLogic/AdaptiveAI.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/AISkirmishPlayer.h"
 #include "GameLogic/ExperienceTracker.h"
@@ -567,6 +568,12 @@ Player::~Player()
 		m_battlePlanBonuses->deleteInstance();
 		m_battlePlanBonuses = NULL;
 	}
+
+	// Clean up adaptive AI if this player owns it
+	if (TheAdaptiveAI && TheAdaptiveAI->getOwnerPlayer() == this) {
+		TheAdaptiveAI->deleteInstance();
+		TheAdaptiveAI = NULL;
+	}
 }
 
 //=============================================================================
@@ -713,6 +720,11 @@ void Player::update()
 	if (m_ai)
 		m_ai->update();
 
+	// Update adaptive AI learning (if this player has one)
+	if (TheAdaptiveAI && TheAdaptiveAI->getOwnerPlayer() == this) {
+		TheAdaptiveAI->update();
+	}
+
 	// Allow the teams this player owns to update themselves.
 	for( PlayerTeamList::iterator it = m_playerTeamPrototypes.begin(); it != m_playerTeamPrototypes.end(); ++it ) 
 	{
@@ -783,6 +795,11 @@ void Player::setPlayerType(PlayerType t, Bool skirmish)
 		} else {
 			// create AIPlayer and attach to this Player
 			m_ai = newInstance(AIPlayer)( this );
+		}
+
+		// Initialize adaptive AI learning system for the first AI player
+		if (!TheAdaptiveAI) {
+			TheAdaptiveAI = newInstance(AdaptiveCombatTracker)( this );
 		}
 	}
 }

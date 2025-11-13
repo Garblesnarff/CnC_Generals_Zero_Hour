@@ -25,9 +25,11 @@
 #include "GameLogic/AdaptiveAI.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/ScriptEngine.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/ThingTemplate.h"
+#include "Common/GlobalData.h"
 
 // Global instance
 AdaptiveCombatTracker *TheAdaptiveAI = NULL;
@@ -37,8 +39,10 @@ AdaptiveCombatTracker *TheAdaptiveAI = NULL;
  */
 AdaptiveCombatTracker::AdaptiveCombatTracker(Player *owner)
 	: m_owner(owner)
+	, m_personality(AI_PERSONALITY_BALANCED)
 {
 	reset();
+	initializePersonalityWeights();
 }
 
 /**
@@ -154,50 +158,70 @@ void AdaptiveCombatTracker::update()
 	if (currentFrame % (10 * LOGICFRAMES_PER_SECOND) == 0) {
 		updatePriorities();
 	}
+
+	// Display debug information if enabled (every 3 seconds)
+	displayDebugInfo();
 }
 
 /**
  * Calculate how effective a kill was.
  * Returns 0.0 to 2.0+ (0 = no impact, 1.0 = normal, 2.0 = very effective)
+ * NOW PERSONALITY-AWARE: Uses personality weights to evaluate effectiveness
  */
 Real AdaptiveCombatTracker::calculateEffectiveness(const TargetKillRecord &record)
 {
 	Real effectiveness = 0.5f; // Base value
 
-	// Did we hurt their economy?
+	// Economic damage (weighted by personality)
 	Int moneyDelta = record.enemyMoneyBefore - record.enemyMoneyAfter;
-	if (moneyDelta > 500) {
-		effectiveness += 0.3f; // Significant economic impact
-	} else if (moneyDelta > 1000) {
-		effectiveness += 0.6f; // Major economic damage
+	if (moneyDelta > 1000) {
+		effectiveness += 0.6f * m_weights.economicDamageWeight; // Major economic damage
+	} else if (moneyDelta > 500) {
+		effectiveness += 0.3f * m_weights.economicDamageWeight; // Significant economic impact
 	}
 
-	// Did we reduce their unit count significantly?
+	// Unit kills and collateral damage (weighted by personality)
 	Int unitDelta = record.enemyUnitsCountBefore - record.enemyUnitsCountAfter;
 	if (unitDelta > 3) {
-		effectiveness += 0.4f; // Killed a valuable unit that took others with it
+		// Killed a valuable unit that took others with it
+		effectiveness += 0.4f * m_weights.collateralDamageWeight;
 	} else if (unitDelta > 1) {
-		effectiveness += 0.2f; // Some collateral benefit
+		// Some collateral benefit
+		effectiveness += 0.2f * m_weights.collateralDamageWeight;
+	} else if (unitDelta == 1) {
+		// Single unit kill - valued by aggressive personalities
+		effectiveness += 0.3f * m_weights.unitKillWeight;
 	}
 
-	// Bonus for certain strategic target types
+	// Strategic target bonuses (weighted by personality)
 	AsciiString targetType = record.targetType;
 	if (targetType.find("Power") != std::string::npos) {
-		effectiveness += 0.3f; // Power plants are strategic
+		// Power plants - strategic and economic
+		effectiveness += 0.3f * m_weights.strategicTargetWeight;
 	} else if (targetType.find("Supply") != std::string::npos ||
 	           targetType.find("Dock") != std::string::npos) {
-		effectiveness += 0.4f; // Economy targets are valuable
+		// Economy targets - very valuable for economic personalities
+		effectiveness += 0.4f * m_weights.economicDamageWeight;
+		effectiveness += 0.2f * m_weights.strategicTargetWeight;
 	} else if (targetType.find("Factory") != std::string::npos ||
 	           targetType.find("Barracks") != std::string::npos ||
 	           targetType.find("Airfield") != std::string::npos) {
-		effectiveness += 0.5f; // Production facilities are critical
+		// Production facilities - critical strategic targets
+		effectiveness += 0.5f * m_weights.strategicTargetWeight;
+	} else if (targetType.find("Tank") != std::string::npos ||
+	           targetType.find("Vehicle") != std::string::npos ||
+	           targetType.find("Infantry") != std::string::npos ||
+	           targetType.find("Aircraft") != std::string::npos) {
+		// Combat units - valued by aggressive personalities
+		effectiveness += 0.4f * m_weights.unitKillWeight;
 	}
 
 	return effectiveness;
 }
 
 /**
- * Update priority multipliers based on learned effectiveness
+ * Update priority multipliers based on learned effectiveness.
+ * NOW PERSONALITY-AWARE: Uses personality-specific learning rates and sample sizes.
  */
 void AdaptiveCombatTracker::updatePriorities()
 {
@@ -206,22 +230,33 @@ void AdaptiveCombatTracker::updatePriorities()
 	     it != m_targetStats.end(); ++it) {
 		TargetTypeStats &stats = it->second;
 
-		// Only adjust if we have enough data (at least 3 kills)
-		if (stats.timesKilled < 3) continue;
+		// Only adjust if we have enough data (personality-specific threshold)
+		if (stats.timesKilled < (Int)m_weights.minSampleSize) continue;
 
 		// Map effectiveness to multiplier
 		// avgEffectiveness: 0.0-0.5 = bad target (multiply by 0.7)
 		// avgEffectiveness: 0.5-1.0 = normal (multiply by 1.0)
 		// avgEffectiveness: 1.0-2.0+ = great target (multiply by 1.5-2.0)
 
+		Real targetMultiplier;
 		if (stats.avgEffectiveness < 0.5f) {
-			stats.priorityMultiplier = 0.7f; // Deprioritize
+			targetMultiplier = 0.7f; // Deprioritize
 		} else if (stats.avgEffectiveness > 1.5f) {
-			stats.priorityMultiplier = 1.8f; // High priority!
+			targetMultiplier = 1.8f; // High priority!
 		} else {
 			// Linear interpolation between 0.8 and 1.5
-			stats.priorityMultiplier = 0.8f + (stats.avgEffectiveness - 0.5f) * 0.7f;
+			targetMultiplier = 0.8f + (stats.avgEffectiveness - 0.5f) * 0.7f;
 		}
+
+		// Apply learning rate: how quickly we adapt to new information
+		// Higher learning rate = faster adaptation (aggressive)
+		// Lower learning rate = slower, more cautious adaptation (defensive)
+		Real delta = targetMultiplier - stats.priorityMultiplier;
+		stats.priorityMultiplier += delta * m_weights.learningRate;
+
+		// Clamp to reasonable range
+		if (stats.priorityMultiplier < 0.5f) stats.priorityMultiplier = 0.5f;
+		if (stats.priorityMultiplier > 2.5f) stats.priorityMultiplier = 2.5f;
 	}
 }
 
@@ -244,6 +279,70 @@ Real AdaptiveCombatTracker::getPriorityMultiplier(const ThingTemplate *targetTem
 }
 
 /**
+ * Set the AI personality type.
+ * This changes how the AI evaluates targets and learns from combat.
+ */
+void AdaptiveCombatTracker::setPersonality(AIPersonality personality)
+{
+	m_personality = personality;
+	initializePersonalityWeights();
+
+	// Reset learned data when changing personality
+	// (different personality = different evaluation criteria)
+	reset();
+}
+
+/**
+ * Initialize personality-specific weight parameters.
+ * Each personality type emphasizes different aspects of combat.
+ */
+void AdaptiveCombatTracker::initializePersonalityWeights()
+{
+	switch (m_personality) {
+		case AI_PERSONALITY_AGGRESSIVE:
+			// Aggressive AI: Focus on killing enemy units and armies
+			m_weights.economicDamageWeight = 0.3f;			// Less interested in economy
+			m_weights.unitKillWeight = 2.0f;						// Highly values unit kills
+			m_weights.strategicTargetWeight = 0.5f;			// Some interest in strategic targets
+			m_weights.collateralDamageWeight = 1.5f;		// Values collateral damage
+			m_weights.learningRate = 1.5f;							// Learns quickly (aggressive adaptation)
+			m_weights.minSampleSize = 2.0f;							// Acts on less data
+			break;
+
+		case AI_PERSONALITY_ECONOMIC:
+			// Economic AI: Focus on disrupting enemy economy
+			m_weights.economicDamageWeight = 2.5f;			// Highly values economic damage
+			m_weights.unitKillWeight = 0.4f;						// Less interested in unit kills
+			m_weights.strategicTargetWeight = 2.0f;			// Highly values strategic targets
+			m_weights.collateralDamageWeight = 0.5f;		// Doesn't care much about collateral
+			m_weights.learningRate = 1.2f;							// Learns moderately fast
+			m_weights.minSampleSize = 2.0f;							// Acts on less data
+			break;
+
+		case AI_PERSONALITY_DEFENSIVE:
+			// Defensive AI: Focus on countering player tactics
+			m_weights.economicDamageWeight = 0.8f;			// Moderate interest in economy
+			m_weights.unitKillWeight = 1.2f;						// Values eliminating threats
+			m_weights.strategicTargetWeight = 1.0f;			// Balanced strategic interest
+			m_weights.collateralDamageWeight = 1.0f;		// Balanced collateral interest
+			m_weights.learningRate = 0.8f;							// Learns more slowly (cautious)
+			m_weights.minSampleSize = 4.0f;							// Needs more data before acting
+			break;
+
+		case AI_PERSONALITY_BALANCED:
+		default:
+			// Balanced AI: No particular bias, standard learner
+			m_weights.economicDamageWeight = 1.0f;
+			m_weights.unitKillWeight = 1.0f;
+			m_weights.strategicTargetWeight = 1.0f;
+			m_weights.collateralDamageWeight = 1.0f;
+			m_weights.learningRate = 1.0f;								// Normal learning rate
+			m_weights.minSampleSize = 3.0f;							// Standard sample size
+			break;
+	}
+}
+
+/**
  * Get the enemy player (simplified - just gets first enemy we find)
  */
 Player *AdaptiveCombatTracker::getEnemyPlayer() const
@@ -258,4 +357,156 @@ Player *AdaptiveCombatTracker::getEnemyPlayer() const
 	}
 
 	return NULL;
+}
+
+/**
+ * Display debug information about adaptive AI learning progress.
+ * Shows what the AI has learned and current priorities.
+ * Only displays when TheGlobalData->m_debugAI is enabled.
+ */
+void AdaptiveCombatTracker::displayDebugInfo()
+{
+	// Only display debug info if AI debugging is enabled
+	if (!TheGlobalData || !TheGlobalData->m_debugAI) {
+		return;
+	}
+
+	// Only output every few seconds to avoid spam
+	UnsignedInt currentFrame = TheGameLogic->getFrame();
+	if (currentFrame % (3 * LOGICFRAMES_PER_SECOND) != 0) {
+		return;
+	}
+
+	// Build debug message
+	AsciiString debugMsg;
+
+	// Header: AI Personality Type
+	debugMsg.concat("=== ADAPTIVE AI DEBUG ===");
+	TheScriptEngine->AppendDebugMessage(debugMsg, false);
+
+	// Show personality type
+	debugMsg.clear();
+	debugMsg.concat("Personality: ");
+	switch (m_personality) {
+		case AI_PERSONALITY_AGGRESSIVE:
+			debugMsg.concat("AGGRESSIVE (Values unit kills)");
+			break;
+		case AI_PERSONALITY_ECONOMIC:
+			debugMsg.concat("ECONOMIC (Targets economy)");
+			break;
+		case AI_PERSONALITY_DEFENSIVE:
+			debugMsg.concat("DEFENSIVE (Counter tactics)");
+			break;
+		case AI_PERSONALITY_BALANCED:
+		default:
+			debugMsg.concat("BALANCED (Standard learner)");
+			break;
+	}
+	TheScriptEngine->AppendDebugMessage(debugMsg, false);
+
+	// Show learned priority multipliers (top priorities only)
+	if (!m_targetStats.empty()) {
+		debugMsg.clear();
+		debugMsg.concat("--- Learned Priorities ---");
+		TheScriptEngine->AppendDebugMessage(debugMsg, false);
+
+		// Find targets with interesting multipliers (not 1.0)
+		Int displayCount = 0;
+		for (std::map<AsciiString, TargetTypeStats>::const_iterator it = m_targetStats.begin();
+		     it != m_targetStats.end() && displayCount < 5; ++it) {
+			const TargetTypeStats &stats = it->second;
+
+			// Only show if we have enough data and multiplier is not default
+			if (stats.timesKilled >= (Int)m_weights.minSampleSize) {
+				debugMsg.clear();
+
+				// Truncate long names
+				AsciiString shortName = stats.typeName;
+				if (shortName.length() > 20) {
+					shortName = shortName.substr(0, 17);
+					shortName.concat("...");
+				}
+
+				// Format: "TargetName: 1.8x (kills:5, eff:1.6)"
+				char buffer[128];
+				sprintf(buffer, "%s: %.1fx (kills:%d, eff:%.1f)",
+				        shortName.str(),
+				        stats.priorityMultiplier,
+				        stats.timesKilled,
+				        stats.avgEffectiveness);
+				debugMsg.concat(buffer);
+
+				TheScriptEngine->AppendDebugMessage(debugMsg, false);
+				displayCount++;
+			}
+		}
+
+		if (displayCount == 0) {
+			debugMsg.clear();
+			debugMsg.concat("(Not enough data yet - need ");
+			char buffer[32];
+			sprintf(buffer, "%d", (Int)m_weights.minSampleSize);
+			debugMsg.concat(buffer);
+			debugMsg.concat(" kills per target)");
+			TheScriptEngine->AppendDebugMessage(debugMsg, false);
+		}
+	} else {
+		debugMsg.clear();
+		debugMsg.concat("(No targets analyzed yet)");
+		TheScriptEngine->AppendDebugMessage(debugMsg, false);
+	}
+
+	// Show recent kills (last 3)
+	if (!m_recentKills.empty()) {
+		debugMsg.clear();
+		debugMsg.concat("--- Recent Kills ---");
+		TheScriptEngine->AppendDebugMessage(debugMsg, false);
+
+		Int killCount = 0;
+		for (Int i = (Int)m_recentKills.size() - 1; i >= 0 && killCount < 3; --i) {
+			const TargetKillRecord &record = m_recentKills[i];
+
+			// Only show analyzed kills (with effectiveness score)
+			if (record.effectivenessScore > 0.0f) {
+				debugMsg.clear();
+
+				// Truncate long names
+				AsciiString shortName = record.targetType;
+				if (shortName.length() > 20) {
+					shortName = shortName.substr(0, 17);
+					shortName.concat("...");
+				}
+
+				// Format: "TargetName: eff=1.2 (dmg:$500, units:-2)"
+				Int moneyDelta = record.enemyMoneyBefore - record.enemyMoneyAfter;
+				Int unitDelta = record.enemyUnitsCountBefore - record.enemyUnitsCountAfter;
+
+				char buffer[128];
+				sprintf(buffer, "%s: eff=%.1f (dmg:$%d, units:%d)",
+				        shortName.str(),
+				        record.effectivenessScore,
+				        moneyDelta,
+				        unitDelta);
+				debugMsg.concat(buffer);
+
+				TheScriptEngine->AppendDebugMessage(debugMsg, false);
+				killCount++;
+			}
+		}
+
+		if (killCount == 0) {
+			debugMsg.clear();
+			debugMsg.concat("(No analyzed kills yet)");
+			TheScriptEngine->AppendDebugMessage(debugMsg, false);
+		}
+	}
+
+	// Footer
+	debugMsg.clear();
+	debugMsg.concat("=========================");
+	TheScriptEngine->AppendDebugMessage(debugMsg, false);
+
+	// Also log to debug output (for file logs)
+	DEBUG_LOG(("Adaptive AI: %d target types learned, %d recent kills tracked\n",
+	           (Int)m_targetStats.size(), (Int)m_recentKills.size()));
 }

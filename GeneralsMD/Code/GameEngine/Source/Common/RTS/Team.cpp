@@ -50,6 +50,7 @@
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/ScriptActions.h"
 #include "GameLogic/ScriptEngine.h"
+#include "GameLogic/Squad.h"
 
 #ifdef _INTERNAL
 // for occasional debugging...
@@ -1545,6 +1546,52 @@ Object *Team::getTeamTargetObject(void)
 		m_commonAttackTarget = INVALID_ID;
 	}
 	return target;
+}
+
+// ------------------------------------------------------------------------
+/**
+ * Focus Fire Enhancement - Update team's target using squad coordination
+ * This finds the best target for multiple team members to focus fire on together,
+ * improving combat effectiveness significantly.
+ */
+Bool Team::updateFocusFireTarget(Real maxRange, const AttackPriorityInfo* attackInfo)
+{
+	// Only AI players use focus fire
+	if (getControllingPlayer()->getPlayerType() != PLAYER_COMPUTER) {
+		return FALSE;
+	}
+
+	// Don't use focus fire on easy difficulty (keep AI less effective)
+	if (getControllingPlayer()->getPlayerDifficulty() == DIFFICULTY_EASY) {
+		return FALSE;
+	}
+
+	// Only update if we should be using common attack targets
+	if (!getPrototype()->getTemplateInfo()->m_attackCommonTarget) {
+		return FALSE;
+	}
+
+	// Create a temporary squad from team members
+	Squad *tempSquad = newInstance(Squad)();
+	if (!tempSquad) {
+		return FALSE;
+	}
+
+	tempSquad->squadFromTeam(this, TRUE);
+
+	// Use the squad's focus fire algorithm to find the best target
+	Object* focusTarget = tempSquad->findBestFocusFireTarget(maxRange, attackInfo);
+
+	// Clean up temporary squad
+	tempSquad->deleteInstance();
+
+	// Set the focus fire target if found
+	if (focusTarget) {
+		setTeamTargetObject(focusTarget);
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 // ------------------------------------------------------------------------

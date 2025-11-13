@@ -36,6 +36,32 @@ class Player;
 class ThingTemplate;
 
 /**
+ * AI Personality Types
+ * Each personality type learns differently and values different targets.
+ */
+enum AIPersonality
+{
+	AI_PERSONALITY_AGGRESSIVE,		// Values killing enemy units highly, learns to target armies
+	AI_PERSONALITY_ECONOMIC,			// Values disrupting enemy economy, learns to target supply/power
+	AI_PERSONALITY_DEFENSIVE,			// Values protecting own assets, learns to counter player's tactics
+	AI_PERSONALITY_BALANCED				// Standard learner with no bias (default)
+};
+
+/**
+ * Personality-specific weight parameters for effectiveness calculation.
+ * Each personality type emphasizes different aspects of combat effectiveness.
+ */
+struct PersonalityWeights
+{
+	Real economicDamageWeight;			// How much to value economic damage
+	Real unitKillWeight;						// How much to value killing units
+	Real strategicTargetWeight;			// How much to value strategic targets (power, production)
+	Real collateralDamageWeight;		// How much to value collateral damage
+	Real learningRate;							// How quickly to adapt (0.5 = slow, 1.0 = normal, 2.0 = fast)
+	Real minSampleSize;							// Minimum kills needed before adjusting priorities
+};
+
+/**
  * Tracks the effectiveness of destroying different target types.
  *
  * The idea: Instead of fixed priorities, learn which targets matter.
@@ -44,6 +70,13 @@ class ThingTemplate;
  * - Should we focus fire on their strongest units?
  *
  * This creates emergent behavior where the AI adapts to each match.
+ *
+ * NEW: Personality System
+ * Different AI players can have different personalities that affect learning:
+ * - Aggressive AIs learn to target armies and value unit kills
+ * - Economic AIs learn to disrupt enemy resources
+ * - Defensive AIs learn to counter player tactics
+ * - Balanced AIs have no particular bias
  */
 class AdaptiveCombatTracker : public MemoryPoolObject
 {
@@ -76,6 +109,34 @@ public:
 	 */
 	void reset();
 
+	/**
+	 * Set the AI personality type.
+	 * This affects how the AI evaluates targets and learns from combat.
+	 */
+	void setPersonality(AIPersonality personality);
+
+	/**
+	 * Get the current personality type.
+	 */
+	AIPersonality getPersonality() const { return m_personality; }
+
+	/**
+	 * Get the personality weights for the current personality.
+	 */
+	const PersonalityWeights& getPersonalityWeights() const { return m_weights; }
+
+	/**
+	 * Get the owner player for this tracker.
+	 */
+	Player *getOwnerPlayer() const { return m_owner; }
+
+	/**
+	 * Display debug information about learning progress.
+	 * Shows priority multipliers, recent kills, and effectiveness scores.
+	 * Only active when TheGlobalData->m_debugAI is enabled.
+	 */
+	void displayDebugInfo();
+
 private:
 	struct TargetKillRecord
 	{
@@ -97,6 +158,8 @@ private:
 	};
 
 	Player *m_owner;									// The AI player who owns this tracker
+	AIPersonality m_personality;			// Current AI personality type
+	PersonalityWeights m_weights;			// Weight parameters for current personality
 
 	// Recent kills we're tracking
 	std::vector<TargetKillRecord> m_recentKills;
@@ -119,6 +182,11 @@ private:
 	 * Get enemy player (for tracking their resources/units).
 	 */
 	Player *getEnemyPlayer() const;
+
+	/**
+	 * Initialize personality weights based on personality type.
+	 */
+	void initializePersonalityWeights();
 };
 
 /**

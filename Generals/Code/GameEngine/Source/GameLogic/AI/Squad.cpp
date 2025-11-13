@@ -1,5 +1,5 @@
 /*
-**	Command & Conquer Generals(tm)
+**	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
 **	This program is free software: you can redistribute it and/or modify
@@ -47,6 +47,9 @@
 #include "GameLogic/AI.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
+#include "GameLogic/ScriptEngine.h"
+#include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/PartitionManager.h"
 
 #ifdef _INTERNAL
 // for occasional debugging...
@@ -190,6 +193,163 @@ void Squad::aiGroupFromSquad(AIGroup* aiGroupToFill)
 	for (VecObjectPtr::iterator it = m_objectsCached.begin(); it != m_objectsCached.end(); ++it) {
 		aiGroupToFill->add((*it));
 	}
+}
+
+// ------------------------------------------------------------------------------------------------
+/** Focus Fire Enhancement - Find best target for squad coordination
+ *  This enhances squad AI by helping units focus fire on high-value targets
+ *  that multiple squad members can attack together.
+ */
+// ------------------------------------------------------------------------------------------------
+Object* Squad::findBestFocusFireTarget(Real maxRange, const AttackPriorityInfo* attackInfo) const
+{
+	const VecObjectPtr& liveObjects = const_cast<Squad*>(this)->getLiveObjects();
+	if (liveObjects.empty()) {
+		return NULL;
+	}
+
+	// Get reference squad member position for distance calculations
+	Object* firstMember = liveObjects[0];
+	if (!firstMember) {
+		return NULL;
+	}
+
+	// Find all potential targets within range
+	std::vector<Object*> potentialTargets;
+
+	// Use partition manager to efficiently find enemies in range
+	PartitionFilterRelationship filterEnemy(firstMember, PartitionFilterRelationship::ALLOW_ENEMIES);
+	PartitionFilterPossibleToAttack filterAttackable(ATTACK_NEW_TARGET, firstMember, CMD_FROM_AI);
+
+	PartitionData data;
+	data.pos = *firstMember->getPosition();
+	data.radius = maxRange;
+
+	ThePartitionManager->findObjectsInRange(&data, &filterEnemy, &filterAttackable);
+
+	if (data.objectList.empty()) {
+		return NULL;
+	}
+
+	// Score each target based on focus fire potential
+	Object* bestTarget = NULL;
+	Real bestScore = -1.0f;
+
+	for (ListObjectPtr::iterator it = data.objectList.begin(); it != data.objectList.end(); ++it) {
+		Object* target = *it;
+		if (!target || target->isEffectivelyDead()) {
+			continue;
+		}
+
+		Real score = calculateFocusFireScore(target, attackInfo);
+		if (score > bestScore) {
+			bestScore = score;
+			bestTarget = target;
+		}
+	}
+
+	return bestTarget;
+}
+
+// ------------------------------------------------------------------------------------------------
+/** Count how many squad members can attack a given target
+ */
+// ------------------------------------------------------------------------------------------------
+Int Squad::countSquadMembersCanAttack(const Object* target) const
+{
+	if (!target) {
+		return 0;
+	}
+
+	const VecObjectPtr& liveObjects = const_cast<Squad*>(this)->getLiveObjects();
+	Int count = 0;
+
+	for (VecObjectPtr::const_iterator it = liveObjects.begin(); it != liveObjects.end(); ++it) {
+		Object* member = *it;
+		if (!member || member->isEffectivelyDead()) {
+			continue;
+		}
+
+		// Check if this member can attack the target
+		CanAttackResult result = member->getAbleToAttackSpecificObject(ATTACK_NEW_TARGET, target, CMD_FROM_AI);
+		if (result == ATTACKRESULT_POSSIBLE || result == ATTACKRESULT_POSSIBLE_AFTER_MOVING) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
+// ------------------------------------------------------------------------------------------------
+/** Calculate focus fire score for a potential target
+ *  Higher score = better target for coordinated attack
+ *
+ *  Score factors:
+ *  - Number of squad members that can attack (encourages focus fire)
+ *  - Attack priority (respects existing priority system)
+ *  - Distance (closer targets score higher)
+ *  - Target health (wounded targets score higher to finish them off)
+ */
+// ------------------------------------------------------------------------------------------------
+Real Squad::calculateFocusFireScore(const Object* target, const AttackPriorityInfo* attackInfo) const
+{
+	if (!target) {
+		return 0.0f;
+	}
+
+	// Base score starts at 1.0
+	Real score = 1.0f;
+
+	// Factor 1: Number of squad members that can attack this target
+	// This is the core of focus fire - prioritize targets multiple units can hit
+	Int attackerCount = countSquadMembersCanAttack(target);
+	if (attackerCount == 0) {
+		return 0.0f; // Can't attack, invalid target
+	}
+
+	// Scale score by number of attackers (more attackers = better target)
+	// Use square root to avoid extreme bias towards single targets
+	score *= (1.0f + sqrtf((Real)attackerCount));
+
+	// Factor 2: Attack priority from attack priority info
+	if (attackInfo) {
+		Int priority = attackInfo->getPriority(target->getTemplate());
+		if (priority > 0) {
+			// Higher priority targets get better scores
+			score *= (1.0f + (Real)priority * 0.2f);
+		}
+	}
+
+	// Factor 3: Distance - closer targets are preferred
+	const VecObjectPtr& liveObjects = const_cast<Squad*>(this)->getLiveObjects();
+	if (!liveObjects.empty() && liveObjects[0]) {
+		Real distSqr = liveObjects[0]->getPosition()->distance2DSquared(*target->getPosition());
+		// Inverse distance factor (closer = higher score)
+		// Add small value to avoid division by zero
+		Real distFactor = 1000.0f / (distSqr + 100.0f);
+		score *= distFactor;
+	}
+
+	// Factor 4: Target health - prefer wounded targets to finish them off
+	const BodyModuleInterface* body = target->getBodyModuleInterface();
+	if (body) {
+		Real healthPercent = body->getHealthPercent();
+		// Bonus for targets below 50% health (finish them off!)
+		if (healthPercent < 0.5f) {
+			score *= (1.0f + (0.5f - healthPercent));
+		}
+	}
+
+	// Factor 5: Bonus for high-value targets (structures, special units)
+	KindOfMaskType highValueTypes;
+	highValueTypes.set(KINDOF_STRUCTURE);
+	highValueTypes.set(KINDOF_HERO);
+	highValueTypes.set(KINDOF_HUGE_VEHICLE);
+	if (target->isAnyKindOf(highValueTypes)) {
+		score *= 1.3f;
+	}
+
+	return score;
 }
 
 // ------------------------------------------------------------------------------------------------

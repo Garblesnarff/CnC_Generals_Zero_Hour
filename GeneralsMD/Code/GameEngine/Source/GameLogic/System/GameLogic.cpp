@@ -78,6 +78,7 @@
 #include "GameClient/GameWindowTransitions.h"
 
 #include "GameLogic/AI.h"
+#include "GameLogic/AdaptiveAI.h"
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/CaveSystem.h"
 #include "GameLogic/CrateSystem.h"
@@ -3974,6 +3975,17 @@ void GameLogic::destroyObject( Object *obj )
 
 	// mark object as destroyed
 	obj->setStatus( MAKE_OBJECT_STATUS_MASK( OBJECT_STATUS_DESTROYED ) );
+
+	// Notify adaptive AI system of enemy kill
+	if (TheAdaptiveAI && obj) {
+		Player *objPlayer = obj->getControllingPlayer();
+		Player *trackerPlayer = TheAdaptiveAI->getOwnerPlayer();
+		// Only track if this was an enemy (different player and not allies)
+		if (objPlayer && trackerPlayer && objPlayer != trackerPlayer &&
+		    !objPlayer->isPlayerAlly(trackerPlayer)) {
+			TheAdaptiveAI->onEnemyKilled(obj, NULL);
+		}
+	}
 
 	// We desperately need to stop here, or else the destructor of the statemachine will try to do
 	// stopping logic, which uses virtual functions and deleted modules, which will crash us.
